@@ -1,65 +1,117 @@
-version: '3'
+version: "3.9"
 
 networks:
-  laravel:
+  socialhub:
     driver: bridge
 
+volumes:
+  db-data:
+  redis-data:
+
 services:
-  site:
+  nginx:
     build:
       context: .
       dockerfile: nginx.dockerfile
-    container_name: tsa_nginx
+    container_name: socialhub_nginx
     ports:
       - "127.0.0.1:8029:80"
     volumes:
       - ./src:/var/www/html:delegated
     depends_on:
       - php
-      - db
     networks:
-      - laravel
-
-  db:
-    image: mysql:8.0
-    container_name: tsa_db
-    ports:
-      - "127.0.0.1:3029:3306"
-    environment:
-      MYSQL_ROOT_PASSWORD: topsecret
-      MYSQL_DATABASE: payment_db
-      MYSQL_USER: payment_user
-      MYSQL_PASSWORD: topsecret
-      SERVICE_TAGS: dev
-      SERVICE_NAME: db
-    volumes:
-      - ./src:/var/www/html
-    networks:
-      - laravel
+      - socialhub
 
   php:
     build:
       context: .
       dockerfile: php.dockerfile
-    container_name: tsa_php
+    container_name: socialhub_php
+    environment:
+      APP_ENV: local
+      APP_DEBUG: "true"
+      APP_URL: http://localhost:8029
     volumes:
       - ./src:/var/www/html:delegated
+    depends_on:
+      - db
+      - redis
     ports:
       - "127.0.0.1:9029:9000"
     networks:
-      - laravel
+      - socialhub
 
   artisan:
     build:
       context: .
       dockerfile: php.dockerfile
-    container_name: tsa_artisan
+    container_name: socialhub_artisan
+    working_dir: /var/www/html
+    user: laravel
+    entrypoint: ["php", "/var/www/html/artisan"]
+    depends_on:
+      - php
     volumes:
       - ./src:/var/www/html:delegated
-    working_dir: /var/www/html
-    depends_on:
-      - db
-    user: laravel
-    entrypoint: [ 'php', '/var/www/html/artisan' ]
     networks:
-      - laravel
+      - socialhub
+
+  queue:
+    build:
+      context: .
+      dockerfile: php.dockerfile
+    container_name: socialhub_queue
+    working_dir: /var/www/html
+    user: laravel
+    command: ["php", "/var/www/html/artisan", "queue:work", "--tries=3"]
+    depends_on:
+      - php
+      - redis
+      - db
+    volumes:
+      - ./src:/var/www/html:delegated
+    networks:
+      - socialhub
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: php.dockerfile
+    container_name: socialhub_scheduler
+    working_dir: /var/www/html
+    user: laravel
+    command: ["php", "/var/www/html/artisan", "schedule:work"]
+    depends_on:
+      - php
+      - redis
+      - db
+    volumes:
+      - ./src:/var/www/html:delegated
+    networks:
+      - socialhub
+
+  db:
+    image: postgres:15-alpine
+    container_name: socialhub_db
+    environment:
+      POSTGRES_DB: socialhub
+      POSTGRES_USER: socialhub
+      POSTGRES_PASSWORD: secret
+    ports:
+      - "127.0.0.1:5429:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    networks:
+      - socialhub
+
+  redis:
+    image: redis:7-alpine
+    container_name: socialhub_redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:7029:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - socialhub
